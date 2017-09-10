@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -196,7 +197,14 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  // Lane the car is currently on
+  int lane = 1;
+    
+  // Target speed
+  double ref_speed = 0; // mph
+  double max_speed = 49; // mph
+    
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane,&ref_speed,&max_speed](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -233,14 +241,168 @@ int main() {
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
 
-          	json msgJson;
-
-          	vector<double> next_x_vals;
-          	vector<double> next_y_vals;
-
-
+            int prev_size = previous_path_x.size();
+            
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-          	msgJson["next_x"] = next_x_vals;
+            
+            // Update car reference. Too smooth trajectories, use end_path of previous path as the starting reference point in the current iteration
+            if(prev_size > 0){
+                car_s = end_path_s;
+            }
+            
+            // Update target lane and target_speed with sensor fusion data
+            bool too_close = false;
+            
+            // Iterate through all of sensor fusion cars
+            for(int i = 0; i < sensor_fusion.size(); i++){
+                // ith car is in current target lane
+                double i_d = sensor_fusion[i][6];
+                if(i_d < (2 + 4 * lane + 2) && i_d > (2 + 4 * lane - 2)){
+                    double i_vx = sensor_fusion[i][3];
+                    double i_vy = sensor_fusion[i][4];
+                    double i_v = sqrt(i_vx*i_vx + i_vy * i_vy);
+                    double i_s = sensor_fusion[i][5];
+                    
+                    // Predict ith car s value, using the time interval (0.02 sec) times the the waypoints in the previous path
+                    double pred_i_s = i_s + (double) prev_size * 0.02 * i_v;
+                    
+                    // If predicted ith car s value is too close to the end waypoint of the previous path, then slow down or change lanes
+                    
+                    if((pred_i_s > car_s) && (pred_i_s - car_s < 30)){
+                        // TODO: use FSM cost function logic to decide to wether prepare lane change left or right, or just slow down
+                        too_close = true;
+                    }
+                }
+            }
+            
+            if(too_close){
+                ref_speed -= 0.224;
+            }
+            else if (ref_speed < max_speed){
+                ref_speed += 0.224;
+            }
+            
+            // Find
+          	
+            // As in walkthrough video, create a auxiliary list of sparse (x,y) waypoints (aux_wps), evenly spaced at 30m
+            // We will later use this auxiliary waypoints to interporlate and create more waypoints so as to smooth the trajectory
+            vector<double> pts_x;
+            vector<double> pts_y;
+            
+            double ref_x = car_x;
+            double ref_y = car_y;
+            double ref_yaw = deg2rad(car_yaw);
+            
+            // If previous path is almost empty, use car coordinates and heading as a starting reference to fill auxiliary list
+            if(prev_size < 2){
+                
+                // Use points tangent to car heading and add them to the auxiliary list
+                // ¿TODO: multiply by car speed and time?
+                double prev_car_x = car_x - cos(car_yaw);
+                double prev_car_y = car_y - sin(car_yaw);
+                
+                pts_x.push_back(prev_car_x);
+                pts_x.push_back(car_x);
+                
+                pts_y.push_back(prev_car_y);
+                pts_y.push_back(car_y);
+                
+            }
+            else{
+            
+                // Redefine reference state using the latest 2 points in the previous path
+                ref_x = previous_path_x[prev_size-1];
+                ref_y = previous_path_y[prev_size-1];
+                
+                double ref_x_prev = previous_path_x[prev_size-2];
+                double ref_y_prev = previous_path_y[prev_size-2];
+                ref_yaw = atan2(ref_y-ref_y_prev, ref_x-ref_x_prev);
+                
+                pts_x.push_back(ref_x_prev);
+                pts_x.push_back(ref_x);
+                
+                pts_y.push_back(ref_y_prev);
+                pts_y.push_back(ref_y);
+            }
+            
+            // Using Frenet coordinates, add evenly spaced points (30m) ahead of the starting reference
+            vector<double> next_wp_0 = getXY(car_s + 30, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp_1 = getXY(car_s + 60, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_wp_2 = getXY(car_s + 90, (2 + 4 * lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+            pts_x.push_back(next_wp_0[0]);
+            pts_x.push_back(next_wp_1[0]);
+            pts_x.push_back(next_wp_2[0]);
+            
+            pts_y.push_back(next_wp_0[1]);
+            pts_y.push_back(next_wp_1[1]);
+            pts_y.push_back(next_wp_2[1]);
+            
+            json msgJson;
+            
+            // Define the points that will be used by the trajectory planner
+            vector<double> next_x_vals;
+            vector<double> next_y_vals;
+            
+            // Interpolate the auxiliary waypoints (aux_wps) using a spline, but before shift the aux_wps to vehicle coordinates (x-axis is aligned with the car heading)
+            for(int i = 0; i < pts_x.size(); i++){
+                double shift_x = pts_x[i]-ref_x;
+                double shift_y = pts_y[i]-ref_y;
+                
+                cout << "pts_x prev " << i << " " << pts_x[i] << endl;
+                cout << "pts_y prev " << i << " " << pts_y[i] << endl;
+                
+                pts_x[i] = shift_x * cos(ref_yaw) - shift_y * sin(ref_yaw);
+                pts_y[i] = shift_x * sin(ref_yaw) + shift_y * cos(ref_yaw);
+                
+                cout << "pts_x " << i << " " << pts_x[i] << endl;
+                cout << "pts_y " << i << " " << pts_y[i] << endl;
+            }
+            
+            // Create spline and set (x,y) points to the spline
+            tk::spline sp;
+            
+            sp.set_points(pts_x,pts_y);
+            
+            // Fill first the previous path points from the last iterarion, i.e., the remaining points not used by the simulator
+            for(int i = 0; i < previous_path_x.size(); i++){
+                next_x_vals.push_back(previous_path_x[i]);
+                next_y_vals.push_back(previous_path_y[i]);
+            }
+            
+            // Use the method in the walkthrough in which the spline points projected along the x-axis are splitted into equal sizes so as to travel at the target speed
+            double sp_target_x = 30.0;
+            double sp_target_y = sp(sp_target_x);
+            double sp_target_dist = sqrt((sp_target_x)*(sp_target_x) + (sp_target_y)*(sp_target_y));
+            
+            double x_add_on = 0;
+            
+            // Fill up the remaining waypoints with of the trajectory planner
+            for(int i = 1; i <= 50 - previous_path_x.size(); i++){
+            
+                // N is the number of splits, which is calculated using the linearized distance (sp_target_dist), the time interval in which a waypoint is visited (0.02) and the target speed (using the 2.24 to convert from mph to mps).
+                // TODO: update target speed in this loop as well
+                double N = (sp_target_dist/(0.02 * ref_speed / 2.24));
+                double x_point = x_add_on + sp_target_x / N;
+                double y_point = sp(x_point);
+                
+                // Rotate back to normal coordinates
+                double x_ref = x_point;
+                double y_ref = y_point;
+                
+                x_point = (x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw));
+                y_point = (x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw));
+                
+                x_point += ref_x;
+                y_point += ref_y;
+                
+                next_x_vals.push_back(x_point);
+                next_y_vals.push_back(y_point);
+            }
+            
+            // END
+            
+            msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
