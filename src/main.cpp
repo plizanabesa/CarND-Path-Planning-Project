@@ -352,8 +352,8 @@ int main() {
                 cout << "pts_x prev " << i << " " << pts_x[i] << endl;
                 cout << "pts_y prev " << i << " " << pts_y[i] << endl;
                 
-                pts_x[i] = shift_x * cos(ref_yaw) - shift_y * sin(ref_yaw);
-                pts_y[i] = shift_x * sin(ref_yaw) + shift_y * cos(ref_yaw);
+                pts_x[i] = shift_x * cos(-ref_yaw) - shift_y * sin(-ref_yaw);
+                pts_y[i] = shift_x * sin(-ref_yaw) + shift_y * cos(-ref_yaw);
                 
                 cout << "pts_x " << i << " " << pts_x[i] << endl;
                 cout << "pts_y " << i << " " << pts_y[i] << endl;
@@ -385,6 +385,8 @@ int main() {
                 double N = (sp_target_dist/(0.02 * ref_speed / 2.24));
                 double x_point = x_add_on + sp_target_x / N;
                 double y_point = sp(x_point);
+                
+                x_add_on = x_point;
                 
                 // Rotate back to normal coordinates
                 double x_ref = x_point;
