@@ -160,6 +160,78 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 }
 
+// Get lane Id given Frenet d coordinates
+int getLane (double d){
+    
+    int laneId = -1;
+    
+    if( d > 0 && d < 4)
+        laneId = 0;
+    else if (d > 4 && d < 8)
+        laneId = 1;
+    else if (d > 8 && d < 12)
+        laneId = 2;
+    
+    return laneId;
+}
+
+// Check for cars ahead and behind given a lane
+vector<double> contiguousLaneBehaviour(vector<vector<double >> sensor_fusion, int lane, int prev_size, double car_s, double car_d, double end_path_s, double end_path_d, int forward_offset){
+    
+    double status_car_ahead = 0; // 0: no car ahead, 1: car ahead in range
+    double status_car_behind = 0; // 0: no car behind, 1: car behind in range
+    double dist_car_ahead = 10000;
+    double dist_car_behind = 10000;
+    double v_car_ahead = 0;
+    double v_car_behind = 0;
+    double id_car_ahead = -1;
+    double id_car_behind = -1;
+
+    double car_end_s = prev_size > 0 ? end_path_s : car_s;
+    
+    for(int i = 0; i < sensor_fusion.size(); i++){
+    
+        // [id, x, y, v_x, v_y, s, d]
+        vector<double> i_car = sensor_fusion[i];
+        double i_car_d = i_car[6];
+        
+        if (i_car_d > (2 + 4 * lane - 2) && i_car_d < (2 + 4 * lane + 2)){
+            
+            // ith car is in the same lane as in the parameter lane
+            double i_car_v_x = i_car[3];
+            double i_car_v_y = i_car[4];
+            double i_car_v = sqrt(i_car_v_x * i_car_v_x + i_car_v_y * i_car_v_y); // ith car speed
+            double i_car_s = i_car[5];
+            double i_car_end_s = i_car_s + prev_size * 0.02 * i_car_v; // predicted ith car end s location
+            
+            if (i_car_end_s > car_end_s && i_car_end_s < (car_end_s + 30 + forward_offset)){ // Add offset so as to avoid lane changes that are not really useful for overtaking, i.e. when the car ahead in the new lane is slightly ahead than the car ahead in the current lane
+                // The i_th car is ahead and in the path planning horizon
+                status_car_ahead = 1;
+                double i_dist_car_ahead = i_car_end_s - car_end_s;
+                if (i_dist_car_ahead < dist_car_ahead){
+                    dist_car_ahead = i_dist_car_ahead;
+                    v_car_ahead = i_car_v;
+                    id_car_ahead = i_car[0];
+                }
+            }
+            else if (i_car_end_s < car_end_s && car_end_s < (i_car_end_s + 30)){
+                // The i_th car is behind and in the path planning horizon
+                status_car_behind = 1;
+                double i_dist_car_behind = car_end_s - i_car_end_s;
+                if (i_dist_car_behind < dist_car_behind){
+                    dist_car_behind = i_dist_car_behind;
+                    v_car_behind = i_car_v;
+                    id_car_behind = i_car[0];
+                }
+            }
+        }
+    }
+    
+    vector<double> lane_behaviour = {status_car_ahead, status_car_behind, dist_car_ahead, dist_car_behind, v_car_ahead, v_car_behind, id_car_ahead, id_car_behind};
+    return lane_behaviour;
+    
+}
+
 int main() {
   uWS::Hub h;
 
@@ -243,7 +315,7 @@ int main() {
 
             int prev_size = previous_path_x.size();
             
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+          	// Define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
             
             // Update car reference. Too smooth trajectories, use end_path of previous path as the starting reference point in the current iteration
             if(prev_size > 0){
@@ -297,7 +369,7 @@ int main() {
             if(prev_size < 2){
                 
                 // Use points tangent to car heading and add them to the auxiliary list
-                // ¿TODO: multiply by car speed and time?
+                // TODO: ¿Why not multiply cos/sin by car speed and time?
                 double prev_car_x = car_x - cos(car_yaw);
                 double prev_car_y = car_y - sin(car_yaw);
                 
