@@ -178,7 +178,7 @@ int getLane (double d){
 }
 
 // Check for cars ahead and behind given a lane
-vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane, int prev_size, double car_s, double car_v, int forward_offset){
+vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane, int prev_size, double car_s, double car_v, double forward_horizon, double backward_horizon, bool print){
     
     double status_car_ahead = 0; // 0: no car ahead, 1: car ahead in range
     double status_car_behind = 0; // 0: no car behind, 1: car behind in range
@@ -206,14 +206,12 @@ vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane,
             double i_car_s = i_car[5];
             double i_car_end_s = i_car_s + (double) prev_size * 0.02 * i_car_v; // predicted ith car end s location
             
-            double forward_horizon = 30 + forward_offset;
-            double backward_horizon = 30;
             if (car_v >= i_car_v * 2.24){
                 // If the trailing car is travelling at a lower speed, hence, decrease the backward horizon
-                backward_horizon = 15;
+                backward_horizon = 20;
             }
             
-            if (i_car_end_s > car_end_s && i_car_end_s < (car_end_s + forward_horizon)){ // Add offset so as to avoid lane changes that are not really useful for overtaking, i.e. when the car ahead in the new lane is slightly ahead than the car ahead in the current lane
+            if (i_car_end_s > car_end_s && i_car_end_s < (car_end_s + forward_horizon)){
                 // The i_th car is ahead and in the path planning horizon
                 status_car_ahead = 1;
                 double i_dist_car_ahead = i_car_end_s - car_end_s;
@@ -222,6 +220,8 @@ vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane,
                     v_car_ahead = i_car_v * 2.24;
                     id_car_ahead = i_car[0];
                 }
+                
+
             }
             else if (i_car_end_s < car_end_s && car_end_s < (i_car_end_s + backward_horizon)){
                 // The i_th car is behind and in the path planning horizon
@@ -234,6 +234,18 @@ vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane,
                 }
             }
         }
+    }
+    
+    if (print){
+        /*if (status_car_ahead == 1){
+            cout << " lane: " << lane << " dist car ahead: " << dist_car_ahead << " speed car ahead: " << v_car_ahead << endl;
+        }
+        if (status_car_behind == 1){
+            cout << " lane: " << lane << " dist car behind: " << dist_car_behind << " speed car behind: " << v_car_behind << endl;
+        }*/
+        
+        cout << " lane: " << lane << " car ahead " << status_car_ahead << " dist car ahead: " << dist_car_ahead << " speed car ahead: " << v_car_ahead << endl;
+        cout << " lane: " << lane << " car behind " << status_car_behind << " dist car behind: " << dist_car_behind << " speed car behind: " << v_car_behind << endl;
     }
     
     return {status_car_ahead, status_car_behind, dist_car_ahead, dist_car_behind, v_car_ahead, v_car_behind, id_car_ahead, id_car_behind};
@@ -251,7 +263,8 @@ vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int curr
         // Car is currently in the left or right lane, so get the cost for the middle lane
         double middle_lane = 1;
         
-        vector<double> middle_lane_behaviour = getLaneBehaviour(sensor_fusion, middle_lane, prev_size, car_s, car_v, 5);
+        // Add offset so as to avoid lane changes that are not really useful for overtaking, i.e. when the car ahead in the new lane is slightly ahead than the car ahead in the current lane
+        vector<double> middle_lane_behaviour = getLaneBehaviour(sensor_fusion, middle_lane, prev_size, car_s, car_v, 40, 30, true);
         double dist_car_ahead = middle_lane_behaviour[2];
         double dist_car_behind = middle_lane_behaviour[3];
         // The new lane change cost is the sum of the individual costs of the distance with the car ahead and behind in the new lne
@@ -268,7 +281,8 @@ vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int curr
         // Left lane change cost
         double left_lane = 0;
         
-        vector<double> left_lane_behaviour = getLaneBehaviour(sensor_fusion, left_lane, prev_size, car_s, car_v, 10);
+        // Also add offset for the forward horizon.
+        vector<double> left_lane_behaviour = getLaneBehaviour(sensor_fusion, left_lane, prev_size, car_s, car_v, 40, 30, true);
         double l_dist_car_ahead = left_lane_behaviour[2];
         double l_dist_car_behind = left_lane_behaviour[3];
         // The new lane change cost is the sum of the individual costs of the distance with the car ahead and behind in the new lne
@@ -277,7 +291,7 @@ vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int curr
         // Right lane change cost
         double right_lane = 2;
         
-        vector<double> right_lane_behaviour = getLaneBehaviour(sensor_fusion, right_lane, prev_size, car_s, car_v, 10);
+        vector<double> right_lane_behaviour = getLaneBehaviour(sensor_fusion, right_lane, prev_size, car_s, car_v, 40, 30, true);
         double r_dist_car_ahead = right_lane_behaviour[2];
         double r_dist_car_behind = right_lane_behaviour[3];
         // The new lane change cost is the sum of the individual costs of the distance with the car ahead and behind in the new lne
@@ -395,7 +409,7 @@ int main() {
             double ref_new_speed = ref_max_speed;
             
             int current_lane = getLane(car_d); //
-            vector<double> current_lane_behaviour = getLaneBehaviour(sensor_fusion, current_lane, prev_size, car_s, car_speed, 0);
+            vector<double> current_lane_behaviour = getLaneBehaviour(sensor_fusion, current_lane, prev_size, car_s, car_speed, 30, 30, false);
             double speed_car_ahead = current_lane_behaviour[4];
 
             if (current_lane_behaviour[0] == 1){
@@ -411,20 +425,25 @@ int main() {
                 vector<double> change_lane_result = getLaneChangeCost(sensor_fusion, current_lane, prev_size, car_s, car_speed);
                 double change_lane_cost = change_lane_result[1];
                 
-                cout << " keep_lane_cost " << keep_lane_cost << endl;
-                cout << " change_lane_cost " << change_lane_cost << endl;
-                
-                if (change_lane_cost + 0.03 < keep_lane_cost){
+                if (change_lane_cost + 0.025 < keep_lane_cost){
                     // If the cost of chaging lane, plus a threshold value, is lower than the cost of keeping lane, then update the lane and mantain the speed
                     lane = change_lane_result[0];
+                    cout << " change_lane " << endl;
+                    cout << " keep_lane_cost " << keep_lane_cost << endl;
+                    cout << " change_lane_cost " << change_lane_cost << endl;
                     
                     // Update ref speeds
                     ref_new_speed = (change_lane_result[2] > ref_new_speed + 5) ? ref_new_speed : change_lane_result[2];
      
-                    if (ref_speed < ref_new_speed){
+                    /*if (ref_speed < ref_new_speed){
                         ref_speed += 0.05;
                         speed_up = true;
-                    }
+                    }*/
+                    
+                    cout << " ref_new_speed " << ref_new_speed << endl;
+                    cout << " car_speed " << car_speed << endl;
+                    cout << " ref_speed " << ref_speed << endl;
+                    
                 }
                 else{
                     // If keep lane, then reduce speed, using the speed of the car ahead as the minimum value
@@ -432,11 +451,10 @@ int main() {
                         ref_speed -= 0.224;
                         speed_down = true;
                     }
+                    
+                    //cout << " keep_lane " << endl;
                 }
                 
-                cout << " ref_new_speed " << ref_new_speed << endl;
-                cout << " car_speed " << car_speed << endl;
-                cout << " ref_speed " << ref_speed << endl;
             }
             else if (ref_speed < ref_new_speed){
                 ref_speed += 0.224;
