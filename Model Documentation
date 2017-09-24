@@ -1,0 +1,21 @@
+Path Planning Project Reflection
+
+The path planning code implemented combines spline trajectory generation (JMT) with a simple behavioural prediction module and a finite state machine algorithm to decide wether to change lane or keep lane when confronting a car ahead. The details of each sub modules are explained below.
+
+The first step in the main method is to update the car reference s value. So as to smooth trajectories between the iterations of the simulator, in a new iteration I used as a starting s value the end s value of the path generated in the previous iteration (line 403).
+
+After that, I predict the behaviour in my current lane (line 412). For this I created a method called getLaneBehaviour (see line 181), which for a given lane, predicts if there will be a car ahead and a car behind in the path planning horizon. The method also returns the distance and speed with the nearest car ahead/behind. To do this, I predict where the ith car in the sensor fusion data vector will be (line 207). If the ith car will be within a range given also by the method parameters, then I determine that there is a near car ahead/behind in that lane. I used different parameter ranges, and finally decided to stay with 30 meters for both forward and backward horizon. In the case of the backward horizon, if the car behind has a speed lower or equal than my speed, then the horizon is reduced to 20 meters, so as to lower the cost of the lane change state. When testing a behaviour in a different lane (for lane changes), the forward horizon was slightly bigger (40 meters), so as to avoid unnecessary overtakings. 
+
+If my lane behaviour model outputs that there is a car ahead in my lane (within a 30 meter range), then I use a finite state machine (FSM) approach to decide wether to stay in the same lane or change lane. For that I compare the costs of both actions. I used a sigmoid function to evalute costs, using the distance with the car ahead/behind as the argument (-1/distance, see line 422). For the lane change cost, I sum up the individual costs of the car ahead and behind. Also, If I am in the middle lane, I choose the lane (left or right) that has the minimum cost as the new lane. If the lane change cost, plus a threshold value of 0.025 (cost equivalent of a car with a distance of 40 meters), is lower than the keep lane cost, then I decide to switch lane. I used the threshold value because otherwise the car might perform risky lane changes or undecisive lane changes (zizaging by changing lane and then returning to the current lane). On the other hand, if I decide to stay in my lane, then I reduce the speed, but only up to the speed of the car ahead.
+
+If my lane behaviour model decides there isn't any car ahead, then I increase the reference speed up to the maximum speed limit (49.5).
+
+The rest of the code is very similar to what was shown in the QA Walkthrough video, i.e., use a auxiliary list with 5 waypoints (using Frenet coordinates to set those 3 new waypoints), set a spline to those waypoints (in XY coordinates), and finally do a linear approximation to fill the remaining points (to a maximum of 50 points) in the X,Y coordinate list that is passed to the simulator. I tried to increase/decrease the reference speed in the loop that fills the reamining final waypoints as suggested in the QA video(line 552), but without much success as it was more challenging since we have to meet the acceleration, jerk and maximum/minimum speed constraints.
+
+In line 478, I have a question: why the cos(car_yaw) / sin(car_yaw) are not multiplied by the car speed and simulator iteration time (0.02), so as to get the distance travelled in that direction?
+
+References used as help: QA video and https://github.com/amahd/CarND_Path_Planning/blob/master/src/main.cpp
+
+
+
+
