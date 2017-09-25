@@ -3,6 +3,7 @@
 #include <uWS/uWS.h>
 #include <chrono>
 #include <iostream>
+#include <algorithm>
 #include <thread>
 #include <vector>
 #include "Eigen-3.3/Eigen/Core"
@@ -178,10 +179,10 @@ int getLane (double d){
 }
 
 // Check for cars ahead and behind given a lane
-vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane, int prev_size, double car_s, double car_v, double forward_horizon, double backward_horizon, bool print){
+vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane, int prev_size, double car_end_s, double car_s, double car_v, double forward_horizon, double backward_horizon, bool print){
     
-    double status_car_ahead = 0; // 0: no car ahead, 1: car ahead in range
-    double status_car_behind = 0; // 0: no car behind, 1: car behind in range
+    double status_car_ahead = 0; // 0: no car ahead, 1: car ahead in range, 2: collision warning
+    double status_car_behind = 0; // 0: no car behind, 1: car behind in range, 2: collision warning
     double dist_car_ahead = 10000;
     double dist_car_behind = 10000;
     double v_car_ahead = 49.5;
@@ -189,8 +190,6 @@ vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane,
     double id_car_ahead = -1;
     double id_car_behind = -1;
 
-    double car_end_s = car_s;
-    
     for(int i = 0; i < sensor_fusion.size(); i++){
     
         // [id, x, y, v_x, v_y, s, d]
@@ -211,22 +210,42 @@ vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane,
                 backward_horizon = 20;
             }
             
-            if (i_car_end_s > car_end_s && i_car_end_s < (car_end_s + forward_horizon)){
+            if (i_car_s > car_s && i_car_s < (car_s + forward_horizon/2)){
+                // The i_th car is ahead and in collision warning distance
+                status_car_ahead = 2;
+                double i_dist_car_ahead = i_car_s - car_s;
+                dist_car_ahead = i_dist_car_ahead;
+                v_car_ahead = i_car_v * 2.24;
+                id_car_ahead = i_car[0];
+                break;
+
+            }
+            else if (i_car_s < car_s && car_s < (i_car_s + backward_horizon/2)){
+                // The i_th car is behind and in collision warning distance
+                status_car_behind = 2;
+                double i_dist_car_behind = car_s - i_car_s;
+                dist_car_behind = i_dist_car_behind;
+                v_car_behind = i_car_v * 2.24;
+                id_car_behind = i_car[0];
+                break;
+
+            }
+            else if (i_car_end_s > car_end_s && i_car_end_s < (car_end_s + forward_horizon)){
                 // The i_th car is ahead and in the path planning horizon
                 status_car_ahead = 1;
                 double i_dist_car_ahead = i_car_end_s - car_end_s;
+                
                 if (i_dist_car_ahead < dist_car_ahead){
                     dist_car_ahead = i_dist_car_ahead;
                     v_car_ahead = i_car_v * 2.24;
                     id_car_ahead = i_car[0];
                 }
-                
-
             }
             else if (i_car_end_s < car_end_s && car_end_s < (i_car_end_s + backward_horizon)){
                 // The i_th car is behind and in the path planning horizon
                 status_car_behind = 1;
                 double i_dist_car_behind = car_end_s - i_car_end_s;
+                
                 if (i_dist_car_behind < dist_car_behind){
                     dist_car_behind = i_dist_car_behind;
                     v_car_behind = i_car_v * 2.24;
@@ -252,7 +271,7 @@ vector<double> getLaneBehaviour(vector<vector<double >> sensor_fusion, int lane,
 }
 
 // Get the cost of changing lane from the current lane
-vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int current_lane, int prev_size, double car_s, double car_v){
+vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int current_lane, int prev_size, double car_end_s, double car_s, double car_v){
     
     double new_lane = -1;
     double new_lane_cost = 10000;
@@ -264,7 +283,7 @@ vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int curr
         double middle_lane = 1;
         
         // Add offset so as to avoid lane changes that are not really useful for overtaking, i.e. when the car ahead in the new lane is slightly ahead than the car ahead in the current lane
-        vector<double> middle_lane_behaviour = getLaneBehaviour(sensor_fusion, middle_lane, prev_size, car_s, car_v, 40, 30, true);
+        vector<double> middle_lane_behaviour = getLaneBehaviour(sensor_fusion, middle_lane, prev_size, car_end_s, car_s, car_v, 40, 30, true);
         double dist_car_ahead = middle_lane_behaviour[2];
         double dist_car_behind = middle_lane_behaviour[3];
         // The new lane change cost is the sum of the individual costs of the distance with the car ahead and behind in the new lne
@@ -282,20 +301,28 @@ vector<double> getLaneChangeCost(vector<vector<double >> sensor_fusion, int curr
         double left_lane = 0;
         
         // Also add offset for the forward horizon.
-        vector<double> left_lane_behaviour = getLaneBehaviour(sensor_fusion, left_lane, prev_size, car_s, car_v, 40, 30, true);
+        vector<double> left_lane_behaviour = getLaneBehaviour(sensor_fusion, left_lane, prev_size, car_end_s, car_s, car_v, 40, 30, true);
         double l_dist_car_ahead = left_lane_behaviour[2];
         double l_dist_car_behind = left_lane_behaviour[3];
         // The new lane change cost is the sum of the individual costs of the distance with the car ahead and behind in the new lne
         double left_lane_cost = (1 - exp(-1/l_dist_car_ahead)) + (1 - exp(-1/l_dist_car_behind));
         
+        if (left_lane_behaviour[0] == 2 || left_lane_behaviour[0] == 2){
+            left_lane_cost = 1;
+        }
+        
         // Right lane change cost
         double right_lane = 2;
         
-        vector<double> right_lane_behaviour = getLaneBehaviour(sensor_fusion, right_lane, prev_size, car_s, car_v, 40, 30, true);
+        vector<double> right_lane_behaviour = getLaneBehaviour(sensor_fusion, right_lane, prev_size, car_end_s, car_s, car_v, 40, 30, true);
         double r_dist_car_ahead = right_lane_behaviour[2];
         double r_dist_car_behind = right_lane_behaviour[3];
         // The new lane change cost is the sum of the individual costs of the distance with the car ahead and behind in the new lne
         double right_lane_cost = (1 - exp(-1/r_dist_car_ahead)) + (1 - exp(-1/r_dist_car_behind));
+        
+        if (right_lane_behaviour[0] == 2 || right_lane_behaviour[0] == 2){
+            right_lane_cost = 1;
+        }
         
         // Choose the lane change with the lower cost
         if (left_lane_cost <= right_lane_cost){
@@ -399,9 +426,12 @@ int main() {
           	// Define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
             
             // Update car reference. Too smooth trajectories, use end_path of previous path as the starting reference point in the current iteration
+            double current_car_s = car_s;
             if(prev_size > 0){
                 car_s = end_path_s;
             }
+            
+            cout << " current_car_s  / car_s / delta " << current_car_s << " / " <<  car_s <<  " / " <<  car_s - current_car_s << endl;
             
             // Check keep lane state
             bool speed_up = false;
@@ -409,11 +439,13 @@ int main() {
             double ref_new_speed = ref_max_speed;
             
             int current_lane = getLane(car_d); //
-            vector<double> current_lane_behaviour = getLaneBehaviour(sensor_fusion, current_lane, prev_size, car_s, car_speed, 30, 30, false);
+            vector<double> current_lane_behaviour = getLaneBehaviour(sensor_fusion, current_lane, prev_size, car_s, current_car_s, car_speed, 30, 30, false);
             double speed_car_ahead = current_lane_behaviour[4];
 
             if (current_lane_behaviour[0] == 1){
      
+                cout << " car ahead " << endl;
+                
                 // There is a car ahead, two complementary options: change lane and/or reduce speed
                 ref_new_speed = speed_car_ahead;
 
@@ -422,10 +454,10 @@ int main() {
                 double keep_lane_cost = (1 - exp(-1/dist_car_ahead));
 
                 // 2. Evaluate the cost of changing lane
-                vector<double> change_lane_result = getLaneChangeCost(sensor_fusion, current_lane, prev_size, car_s, car_speed);
+                vector<double> change_lane_result = getLaneChangeCost(sensor_fusion, current_lane, prev_size, car_s, current_car_s, car_speed);
                 double change_lane_cost = change_lane_result[1];
                 
-                if (change_lane_cost + 0.025 < keep_lane_cost){
+                if (change_lane_cost + 0.03 < keep_lane_cost){
                     // If the cost of chaging lane, plus a threshold value, is lower than the cost of keeping lane, then update the lane and mantain the speed
                     lane = change_lane_result[0];
                     cout << " change_lane " << endl;
@@ -455,6 +487,18 @@ int main() {
                     //cout << " keep_lane " << endl;
                 }
                 
+            }
+            else if (current_lane_behaviour[0] == 2){
+                
+                cout << " car ahead too close: collision warning " << endl;
+                
+                // Collision warning: speed down
+                ref_new_speed = speed_car_ahead;
+                
+                if (ref_speed > ref_new_speed){
+                    ref_speed -= 0.224;
+                    speed_down = true;
+                }
             }
             else if (ref_speed < ref_new_speed){
                 ref_speed += 0.224;
